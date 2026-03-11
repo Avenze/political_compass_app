@@ -3,10 +3,6 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
 	// Produce a lean, self-contained server for Docker runtime
 	output: 'standalone',
-	eslint: {
-		// Allow production builds to succeed even if there are ESLint errors
-		ignoreDuringBuilds: true,
-	},
 	// Enable compression for better performance
 	compress: true,
 	// Enable image optimization
