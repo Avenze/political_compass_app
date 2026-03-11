@@ -50,6 +50,11 @@ type GuessPoint = {
   social: number;
 };
 
+const COMPASS_SIZE = 220;
+const COMPASS_CENTER = COMPASS_SIZE / 2;
+const COMPASS_AXIS_MAX = 10;
+const PX_PER_AXIS_UNIT = COMPASS_CENTER / COMPASS_AXIS_MAX;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -88,6 +93,14 @@ function gridColsClass(count: number) {
     return "grid-cols-10";
   }
   return "grid-cols-12";
+}
+
+function compassToSvgX(econ: number): number {
+  return COMPASS_CENTER + econ * PX_PER_AXIS_UNIT;
+}
+
+function compassToSvgY(social: number): number {
+  return COMPASS_CENTER - social * PX_PER_AXIS_UNIT;
 }
 
 export default function Home() {
@@ -263,8 +276,8 @@ function HomeContent() {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = clamp((event.clientX - rect.left) / rect.width, 0, 1);
     const y = clamp((event.clientY - rect.top) / rect.height, 0, 1);
-    const econ = Number(((x * 20) - 10).toFixed(2));
-    const social = Number((((1 - y) * 20) - 10).toFixed(2));
+    const econ = Number(((x * (COMPASS_AXIS_MAX * 2)) - COMPASS_AXIS_MAX).toFixed(2));
+    const social = Number((((1 - y) * (COMPASS_AXIS_MAX * 2)) - COMPASS_AXIS_MAX).toFixed(2));
     setGuess({ econ, social });
   }
 
@@ -283,12 +296,13 @@ function HomeContent() {
             </p>
             <svg viewBox="0 0 220 220" className="w-full max-w-xs cursor-crosshair rounded-lg border border-slate-300" onClick={setGuessFromClick}>
               <rect x="0" y="0" width="110" height="110" fill="#fee2e2" />
-              <rect x="110" y="0" width="110" height="110" fill="#ffedd5" />
-              <rect x="0" y="110" width="110" height="110" fill="#dbeafe" />
-              <rect x="110" y="110" width="110" height="110" fill="#dcfce7" />
+              <rect x="110" y="0" width="110" height="110" fill="#dbeafe" />
+              <rect x="0" y="110" width="110" height="110" fill="#dcfce7" />
+              <rect x="110" y="110" width="110" height="110" fill="#ffedd5" />
+
               <line x1="110" y1="0" x2="110" y2="220" stroke="#0f172a" strokeWidth="1" />
               <line x1="0" y1="110" x2="220" y2="110" stroke="#0f172a" strokeWidth="1" />
-              {guess && <circle cx={110 + guess.econ * 9} cy={110 - guess.social * 9} r="6" fill="#2563eb" />}
+              {guess && <circle cx={compassToSvgX(guess.econ)} cy={compassToSvgY(guess.social)} r="6" fill="#2563eb" />}
             </svg>
             <p className="mt-2 text-xs text-slate-600">
               {guess ? `Current guess: econ ${guess.econ.toFixed(2)}, social ${guess.social.toFixed(2)}` : "No guess yet (optional)."}
@@ -503,8 +517,8 @@ function HomeContent() {
                   <rect x="110" y="110" width="110" height="110" fill="#dcfce7" />
                   <line x1="110" y1="0" x2="110" y2="220" stroke="#0f172a" strokeWidth="1" />
                   <line x1="0" y1="110" x2="220" y2="110" stroke="#0f172a" strokeWidth="1" />
-                  {guess && <circle cx={110 + guess.econ * 9} cy={110 - guess.social * 9} r="6" fill="#2563eb" />}
-                  <circle cx={110 + analysis.econ * 9} cy={110 - analysis.social * 9} r="6" fill="#111827" />
+                  {guess && <circle cx={compassToSvgX(guess.econ)} cy={compassToSvgY(guess.social)} r="6" fill="#2563eb" />}
+                  <circle cx={compassToSvgX(analysis.econ)} cy={compassToSvgY(analysis.social)} r="6" fill="#111827" />
                 </svg>
               </div>
 
