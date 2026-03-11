@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { type MouseEvent, useEffect, useMemo, useState } from "react";
+import { Suspense, type MouseEvent, useEffect, useMemo, useState } from "react";
 
 import {
   type Analysis,
@@ -91,6 +91,14 @@ function gridColsClass(count: number) {
 }
 
 export default function Home() {
+  return (
+    <Suspense fallback={<HomeFallback />}>
+      <HomeContent />
+    </Suspense>
+  );
+}
+
+function HomeContent() {
   const searchParams = useSearchParams();
   const initialMode = normalizeMode(searchParams.get("mode") ?? undefined);
   const [mode, setMode] = useState<QuestionnaireMode>(initialMode);
@@ -637,6 +645,19 @@ export default function Home() {
             </button>
           </section>
         )}
+      </main>
+    </div>
+  );
+}
+
+function HomeFallback() {
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#fef3c7_0%,_#f8fafc_45%,_#e0f2fe_100%)] px-4 py-8 text-slate-900 sm:px-6">
+      <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 rounded-3xl border border-slate-200/70 bg-white/80 p-5 shadow-xl backdrop-blur sm:p-8">
+        <header className="flex flex-col gap-4">
+          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Political Compass Profiler</h1>
+          <p className="max-w-3xl text-sm text-slate-700 sm:text-base">Loading questionnaire...</p>
+        </header>
       </main>
     </div>
   );

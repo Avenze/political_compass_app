@@ -1,9 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginPageFallback />}>
+      <LoginPageContent />
+    </Suspense>
+  );
+}
+
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = useMemo(() => searchParams.get("next") ?? "/stats", [searchParams]);
@@ -79,6 +87,17 @@ export default function LoginPage() {
             {submitting ? "Signing in..." : "Sign in"}
           </button>
         </form>
+      </main>
+    </div>
+  );
+}
+
+function LoginPageFallback() {
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#dbeafe_0%,_#f8fafc_40%,_#fee2e2_100%)] px-4 py-10 text-slate-900">
+      <main className="mx-auto max-w-md rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-xl backdrop-blur sm:p-8">
+        <h1 className="text-3xl font-bold tracking-tight">Stats Access Login</h1>
+        <p className="mt-2 text-sm text-slate-700">Loading login...</p>
       </main>
     </div>
   );
