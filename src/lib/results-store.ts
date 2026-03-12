@@ -4,12 +4,17 @@ import {
   type Analysis,
   type AnswerMap,
   type CohortSummary,
+  type LanguageCode,
+  type LLMProcessedOutput,
   type QuestionnaireMode,
   buildCohortSummary,
   compareToCohort,
   computeAnalysis,
+  normalizeLanguage,
   normalizeMode,
   normalizeAnswers,
+  isKnownSwedishParty,
+  parseLLMProcessedOutput,
 } from "@/lib/polcomp";
 import { APPWRITE_DATABASE_ID, APPWRITE_RESULTS_COLLECTION_ID } from "@/lib/appwrite-ids";
 import { getServerDatabases } from "@/lib/appwrite-server";
@@ -23,8 +28,10 @@ export type StoredResult = {
   userId: string;
   mode: QuestionnaireMode;
   respondentName: string;
-  guessEcon: number | null;
-  guessSocial: number | null;
+  language: LanguageCode;
+  selectedParty: string;
+  initialEcon: number | null;
+  initialSocial: number | null;
 };
 
 type ResultDocument = Models.Document & {
@@ -35,8 +42,10 @@ type ResultDocument = Models.Document & {
   userId?: string;
   mode?: string;
   respondentName?: string;
-  guessEcon?: number;
-  guessSocial?: number;
+  language?: string;
+  selectedParty?: string;
+  initialEcon?: number;
+  initialSocial?: number;
 };
 
 function normalizeCategory(input?: string) {
@@ -58,13 +67,17 @@ function parseDocument(document: {
   userId?: string;
   mode?: string;
   respondentName?: string;
-  guessEcon?: number;
-  guessSocial?: number;
+  language?: string;
+  selectedParty?: string;
+  initialEcon?: number;
+  initialSocial?: number;
 }): StoredResult | null {
   try {
     const mode = normalizeMode(document.mode);
     const answers = JSON.parse(document.answersJson) as AnswerMap;
-    const analysis = JSON.parse(document.analysisJson) as Analysis;
+    const parsedAnalysis = JSON.parse(document.analysisJson) as Analysis;
+    const llmProfile = parseLLMProcessedOutput((parsedAnalysis as { llmProfile?: unknown }).llmProfile);
+    const analysis: Analysis = llmProfile ? { ...parsedAnalysis, llmProfile } : parsedAnalysis;
     return {
       id: document.$id,
       createdAt: document.createdAtIso ?? document.$createdAt,
@@ -74,8 +87,10 @@ function parseDocument(document: {
       userId: document.userId ?? "",
       mode,
       respondentName: (document.respondentName ?? "Anonymous").trim() || "Anonymous",
-      guessEcon: typeof document.guessEcon === "number" ? document.guessEcon : null,
-      guessSocial: typeof document.guessSocial === "number" ? document.guessSocial : null,
+      language: normalizeLanguage(document.language),
+      selectedParty: isKnownSwedishParty(document.selectedParty ?? "") ? (document.selectedParty as string) : "socialdemokraterna",
+      initialEcon: typeof document.initialEcon === "number" ? document.initialEcon : null,
+      initialSocial: typeof document.initialSocial === "number" ? document.initialSocial : null,
     };
   } catch {
     return null;
@@ -129,13 +144,15 @@ export async function getAllResults(category?: string, mode?: QuestionnaireMode)
 }
 
 export async function createStoredResult(
-  rawAnswers: Record<string, number | undefined>,
+  rawAnswers: Record<string, number | string | undefined>,
   options?: {
     category?: string;
     userId?: string;
     mode?: QuestionnaireMode;
     respondentName?: string;
-    guess?: { econ: number; social: number } | null;
+    language?: LanguageCode;
+    selectedParty?: string;
+    initialPosition?: { econ: number; social: number } | null;
   },
 ) {
   const databases = getServerDatabases();
@@ -144,8 +161,10 @@ export async function createStoredResult(
   const analysis = computeAnalysis(answers, mode);
   const category = normalizeCategory(options?.category);
   const respondentName = options?.respondentName?.trim() || "Anonymous";
-  const guessEcon = typeof options?.guess?.econ === "number" ? options.guess.econ : null;
-  const guessSocial = typeof options?.guess?.social === "number" ? options.guess.social : null;
+  const language = normalizeLanguage(options?.language);
+  const selectedParty = isKnownSwedishParty(options?.selectedParty ?? "") ? (options?.selectedParty as string) : "socialdemokraterna";
+  const initialEcon = typeof options?.initialPosition?.econ === "number" ? options.initialPosition.econ : null;
+  const initialSocial = typeof options?.initialPosition?.social === "number" ? options.initialPosition.social : null;
   const createdAt = new Date().toISOString();
 
   const document = await databases.createDocument<ResultDocument>(
@@ -160,8 +179,10 @@ export async function createStoredResult(
       userId: options?.userId ?? "",
       mode,
       respondentName,
-      guessEcon: guessEcon ?? undefined,
-      guessSocial: guessSocial ?? undefined,
+      language,
+      selectedParty,
+      initialEcon: initialEcon ?? undefined,
+      initialSocial: initialSocial ?? undefined,
     },
   );
 
@@ -174,8 +195,10 @@ export async function createStoredResult(
     userId: options?.userId ?? "",
     mode,
     respondentName,
-    guessEcon,
-    guessSocial,
+    language,
+    selectedParty,
+    initialEcon,
+    initialSocial,
   };
 
   const existing = await getAllResults();
@@ -205,4 +228,33 @@ export async function getResultById(id: string): Promise<StoredResult | null> {
 export async function getCohortSummary(category?: string, mode?: QuestionnaireMode): Promise<CohortSummary> {
   const all = await getAllResults(category, mode);
   return buildCohortSummary(all.map((record) => record.analysis), all.map((record) => record.answers), mode);
+}
+
+export async function updateStoredResultLLMProfile(id: string, llmProfileInput: unknown): Promise<StoredResult | null> {
+  const profile = parseLLMProcessedOutput(llmProfileInput);
+  if (!profile) {
+    throw new Error("Invalid LLM profile payload");
+  }
+
+  const existing = await getResultById(id);
+  if (!existing) {
+    return null;
+  }
+
+  const databases = getServerDatabases();
+  const updatedAnalysis: Analysis = {
+    ...existing.analysis,
+    llmProfile: profile as LLMProcessedOutput,
+  };
+
+  const updated = await databases.updateDocument<ResultDocument>(
+    APPWRITE_DATABASE_ID,
+    APPWRITE_RESULTS_COLLECTION_ID,
+    id,
+    {
+      analysisJson: JSON.stringify(updatedAnalysis),
+    },
+  );
+
+  return parseDocument(updated);
 }

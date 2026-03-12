@@ -1,10 +1,10 @@
 import { Client, Databases, ID, Permission, Role } from "node-appwrite";
 
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ?? "";
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ?? "";
-const apiKey = process.env.NEXT_BACKEND_APPWRITE_API_KEY ?? "";
-const databaseId = process.env.APPWRITE_DATABASE_ID ?? "";
-const collectionId = process.env.APPWRITE_RESULTS_COLLECTION_ID ?? "";
+const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ?? "https://fra.cloud.appwrite.io/v1";
+const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ?? "polcompapp";
+const apiKey = process.env.NEXT_BACKEND_APPWRITE_API_KEY ?? "standard_e08ed93c07a7e108864251fde4cc9af9ffda2d6751b700ab0b373fddf91e8b5cd654b605f3546c719db1b3f18713495fe855bdefc1e7386a38ba7dad9cbaf9e215ec81d93a29774bffeb28525d69a1233aaa3dc74f8c6b2338a20caa91d0af54182620541de4ffd91feed94904a6863cf1435fa3f04047862b4ddb44d359aaf6";
+const databaseId = process.env.APPWRITE_DATABASE_ID ?? "polcomb_prod_db";
+const collectionId = process.env.APPWRITE_RESULTS_COLLECTION_ID ?? "polcomp_results";
 
 if (!endpoint || !projectId || !apiKey || !databaseId || !collectionId) {
   console.error("Missing required env vars: endpoint/projectId/apiKey/databaseId/collectionId.");
@@ -17,7 +17,18 @@ client.setProject(projectId);
 client.setKey(apiKey);
 const databases = new Databases(client);
 
-const REQUIRED_ATTRIBUTES = ["createdAtIso", "category", "answersJson", "analysisJson", "userId", "mode", "respondentName", "guessEcon", "guessSocial"];
+const REQUIRED_ATTRIBUTES = [
+  "createdAtIso",
+  "category",
+  "answersJson",
+  "analysisJson",
+  "userId",
+  "mode",
+  "respondentName",
+  "selectedParty",
+  "initialEcon",
+  "initialSocial",
+];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,14 +117,19 @@ async function ensureAttributes() {
     console.log("Created attribute: respondentName");
   }
 
-  if (!(await hasAttribute("guessEcon"))) {
-    await databases.createFloatAttribute(databaseId, collectionId, "guessEcon", false, -10, 10);
-    console.log("Created attribute: guessEcon");
+  if (!(await hasAttribute("selectedParty"))) {
+    await databases.createStringAttribute(databaseId, collectionId, "selectedParty", 64, true);
+    console.log("Created attribute: selectedParty");
   }
 
-  if (!(await hasAttribute("guessSocial"))) {
-    await databases.createFloatAttribute(databaseId, collectionId, "guessSocial", false, -10, 10);
-    console.log("Created attribute: guessSocial");
+  if (!(await hasAttribute("initialEcon"))) {
+    await databases.createFloatAttribute(databaseId, collectionId, "initialEcon", false, -10, 10);
+    console.log("Created attribute: initialEcon");
+  }
+
+  if (!(await hasAttribute("initialSocial"))) {
+    await databases.createFloatAttribute(databaseId, collectionId, "initialSocial", false, -10, 10);
+    console.log("Created attribute: initialSocial");
   }
 }
 
@@ -133,9 +149,19 @@ async function ensureIndexes() {
     console.log("Created index: idx_mode");
   }
 
+  if (!(await hasIndex("idx_selected_party"))) {
+    await databases.createIndex(databaseId, collectionId, "idx_selected_party", "key", ["selectedParty"]);
+    console.log("Created index: idx_selected_party");
+  }
+
   if (!(await hasIndex("idx_category_mode"))) {
     await databases.createIndex(databaseId, collectionId, "idx_category_mode", "key", ["category", "mode"]);
     console.log("Created index: idx_category_mode");
+  }
+
+  if (!(await hasIndex("idx_party_mode"))) {
+    await databases.createIndex(databaseId, collectionId, "idx_party_mode", "key", ["selectedParty", "mode"]);
+    console.log("Created index: idx_party_mode");
   }
 }
 

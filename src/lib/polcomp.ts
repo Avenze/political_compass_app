@@ -1,4 +1,96 @@
+export type LanguageCode = "en" | "sv";
+
 export type AnswerValue = -2 | -1 | 0 | 1 | 2;
+
+export type QuestionCategory = "general" | "single_priority" | "left_leaning" | "right_leaning";
+
+export type LocalizedText = {
+  en: string;
+  sv: string;
+};
+
+export type LLMConfidenceLevel = "low" | "medium" | "high";
+
+export type LLMProcessedOutput = {
+  respondent_summary: {
+    profile_name: string;
+    confidence_level: LLMConfidenceLevel;
+    core_identity: string;
+    economic_position: string;
+    social_position: string;
+  };
+  axis_scores: {
+    econ: number;
+    social: number;
+    extremity_pct: number;
+    coherence_pct: number;
+    conviction_pct: number;
+  };
+  dominant_patterns: Array<{
+    pattern: string;
+    evidence_question_ids: string[];
+    interpretation: string;
+  }>;
+  tensions_and_contradictions: Array<{
+    tension: string;
+    question_pair: [string, string];
+    severity: "low" | "medium" | "high";
+  }>;
+  policy_priorities_inferred: Array<{
+    priority: string;
+    direction: "expand" | "reform" | "reduce";
+    confidence: number;
+  }>;
+  communication_strategy: {
+    framing_style: string;
+    messages_to_avoid: string[];
+    likely_resonant_themes: string[];
+  };
+  machine_checks: {
+    used_all_questions: boolean;
+    hallucination_free: boolean;
+    language_neutrality_observed: boolean;
+  };
+};
+
+type CondensedProfileName =
+  | "Välfärdsprogressiv"
+  | "Marknadsliberal"
+  | "Ordningskonservativ"
+  | "Grön reformist"
+  | "Socialliberal"
+  | "Nationell konservativ"
+  | "Pragmatisk mitten"
+  | "Demokratisk decentralist";
+
+export type LikertQuestion = {
+  id: string;
+  kind: "likert";
+  category: Exclude<QuestionCategory, "single_priority">;
+  text: LocalizedText;
+  econTilt: number;
+  socialTilt: number;
+};
+
+export type SingleChoiceOption = {
+  id: string;
+  text: LocalizedText;
+  econ: number;
+  social: number;
+  emphasis: number;
+};
+
+export type SingleChoiceQuestion = {
+  id: string;
+  kind: "single";
+  category: "single_priority";
+  text: LocalizedText;
+  options: SingleChoiceOption[];
+};
+
+export type Question = LikertQuestion | SingleChoiceQuestion;
+
+export type AnswerMap = Record<string, AnswerValue | string>;
 
 export type Statement = {
   id: string;
@@ -9,7 +101,17 @@ export type Statement = {
   y: number;
 };
 
-export type AnswerMap = Record<string, AnswerValue>;
+export type ResponsePoint = {
+  questionId: string;
+  category: QuestionCategory;
+  kind: "likert" | "single";
+  text: LocalizedText;
+  answer: LocalizedText;
+  numericValue: number;
+  econContribution: number;
+  socialContribution: number;
+  emphasis: number;
+};
 
 export type Analysis = {
   econ: number;
@@ -24,8 +126,15 @@ export type Analysis = {
   coherenceY: number;
   coherenceOverall: number;
   polarizationIndex: number;
-  topAgreements: Array<Statement & { value: AnswerValue }>;
-  topDisagreements: Array<Statement & { value: AnswerValue }>;
+  responseSkew: number;
+  responseKurtosis: number;
+  convictionIndex: number;
+  predictabilityIndex: number;
+  axisAlignment: number;
+  categoryScores: Record<QuestionCategory, number>;
+  categoryIntensities: Record<QuestionCategory, number>;
+  topAgreements: Array<Statement & { value: number }>;
+  topDisagreements: Array<Statement & { value: number }>;
   econLabel: string;
   socialLabel: string;
   nearestArchetype: {
@@ -42,6 +151,8 @@ export type Analysis = {
   };
   rowAverages: number[];
   colAverages: number[];
+  responsePoints: ResponsePoint[];
+  llmProfile?: LLMProcessedOutput;
 };
 
 export type CohortSummary = {
@@ -56,6 +167,17 @@ export type CohortSummary = {
   extremityStd: number;
   entropyMean: number;
   entropyStd: number;
+  convictionMean: number;
+  convictionStd: number;
+  alignmentMean: number;
+  alignmentStd: number;
+  llmProfilesCount: number;
+  llmCoveragePct: number;
+  llmConfidenceCounts: Record<LLMConfidenceLevel, number>;
+  llmAxisDeltaMean: number;
+  llmAxisDeltaStd: number;
+  categoryMeans: Record<QuestionCategory, number>;
+  categoryStd: Record<QuestionCategory, number>;
   statementAverages: Array<{ id: string; text: string; avg: number }>;
   statementStdDev: Array<{ id: string; stdDev: number }>;
   quadrantCounts: {
@@ -80,187 +202,955 @@ export type ComparativeMetrics = {
   extremityZ: number;
 };
 
-export type QuestionnaireMode = "simple" | "advanced";
+export type QuestionnaireMode = "advanced";
 
-export function normalizeMode(input?: string): QuestionnaireMode {
-  return input === "simple" ? "simple" : "advanced";
+export function normalizeMode(input: string | undefined): QuestionnaireMode {
+  void input;
+  return "advanced";
 }
 
-const LETTERS = "abcdefghijkl";
+export function normalizeLanguage(input?: string): LanguageCode {
+  return input === "sv" ? "sv" : "en";
+}
 
-const ADVANCED_RAW_STATEMENTS = `
-a1|Essential industries should be publicly owned and centrally planned.
-b1|Major investment decisions should be directed by national economic plans.
-c1|The state should cap executive pay in large companies.
-d1|Price controls are justified during economic shocks.
-e1|Strong industrial policy is better than market competition alone.
-f1|National security should justify strict control of private capital.
-g1|A strong state should enforce a shared moral framework.
-h1|Public order should take priority over protest rights.
-i1|Mass surveillance is acceptable to prevent serious threats.
-j1|Courts should defer to elected leaders during crises.
-k1|National unity is more important than regional autonomy.
-l1|Emergency powers should be easy for governments to activate.
-a2|Large firms should be converted into worker-run cooperatives.
-b2|Public banks should direct credit toward social priorities.
-c2|The government should tightly regulate rents and housing prices.
-d2|Inheritance should be heavily taxed to reduce class privilege.
-e2|Strategic sectors should receive permanent state subsidies.
-f2|Governments should set wages through national bargaining frameworks.
-g2|Online platforms should remove destabilizing political content quickly.
-h2|Schools should emphasize civic duty over personal self-expression.
-i2|Military service or national service should be mandatory.
-j2|Strong border controls are necessary even in peacetime.
-k2|Traditional institutions should be protected from rapid social change.
-l2|A nation should prioritize cultural conformity over pluralism.
-a3|Private ownership of natural resources should be phased out.
-b3|Essential utilities should never operate for profit.
-c3|Governments should guarantee employment through public works.
-d3|Tax policy should aim to compress income differences dramatically.
-e3|International trade should be limited to protect domestic workers.
-f3|The state should be able to direct production in key industries.
-g3|Political dissent that threatens stability should face legal limits.
-h3|Public broadcasters should promote national values over neutrality.
-i3|Immigration should be restricted to preserve social cohesion.
-j3|Police should have broad discretion to maintain order.
-k3|Patriotism should be a central part of school curricula.
-l3|Leaders should have authority to override local governments.
-a4|Land value gains should be socialized through taxation.
-b4|Public procurement should favor unionized and cooperative firms.
-c4|Government should set maximum prices for basic necessities.
-d4|A universal basic services model is better than private provision.
-e4|Corporate governance should include mandatory worker representation.
-f4|National development goals should outweigh investor preferences.
-g4|Hate speech bans are necessary even if they limit expression.
-h4|Religious symbols should be restricted in state institutions.
-i4|Public morality laws are needed to protect social stability.
-j4|Referendums should be limited on sensitive constitutional issues.
-k4|Civil liberties can be curtailed when security risks increase.
-l4|Central authorities should coordinate media messaging during crises.
-a5|Public ownership should expand in transportation and energy.
-b5|Progressive taxes should fund broad social guarantees.
-c5|Government should subsidize childcare as core infrastructure.
-d5|Housing should be treated primarily as a social good.
-e5|Monopolies should be broken up even at economic cost.
-f5|Workers should have strong rights to strike and bargain.
-g5|Content moderation should balance safety and open debate.
-h5|Counterterror policies should include strict judicial oversight.
-i5|Schools should teach national history from multiple perspectives.
-j5|Prison sentences should focus more on rehabilitation than punishment.
-k5|Religion and state should remain institutionally separate.
-l5|Public institutions should accommodate diverse cultural practices.
-a6|Universal healthcare should be publicly financed and guaranteed.
-b6|Higher education should be low-cost or free at point of use.
-c6|A strong welfare state improves long-term economic resilience.
-d6|Government should intervene quickly to prevent mass layoffs.
-e6|Competition policy should prevent excessive corporate concentration.
-f6|Financial markets need tighter public oversight.
-g6|Freedom of expression should include unpopular political views.
-h6|Police powers should be constrained by independent review.
-i6|Drug policy should prioritize harm reduction over punishment.
-j6|Immigration policy should combine legal pathways with fair enforcement.
-k6|Election systems should maximize participation and representativeness.
-l6|Constitutions should strongly limit executive authority.
-a7|Income redistribution is necessary for democratic stability.
-b7|Public pensions should be expanded to reduce elder poverty.
-c7|Climate policy should include strong worker transition programs.
-d7|Labor law should make union formation easier.
-e7|Essential medicines should be affordable through public negotiation.
-f7|Governments should use antitrust law aggressively.
-g7|Community safety can improve without expanding incarceration.
-h7|Personal lifestyle choices should be protected from state interference.
-i7|Adults should have broad bodily autonomy rights.
-j7|Civil marriage law should be equal regardless of gender.
-k7|Speech restrictions should be narrowly tailored and rare.
-l7|Public policy should be based on evidence, not tradition alone.
-a8|Worker-owned enterprises should receive tax advantages.
-b8|Public investment should target underserved regions first.
-c8|A living wage should be enforced nationally.
-d8|Local governments should have flexibility in social policy design.
-e8|Carbon pricing should be paired with rebates for low-income households.
-f8|Digital infrastructure should be treated as a public utility.
-g8|Government should be transparent by default.
-h8|Whistleblower protections are essential for accountability.
-i8|Decentralized decision-making usually improves public trust.
-j8|Religious freedom includes freedom from religious coercion.
-k8|Consenting adults should be free to make private choices.
-l8|Peaceful protest should be protected even when disruptive.
-a9|Strong social insurance reduces economic anxiety.
-b9|Public development banks can support long-term innovation.
-c9|Tax systems should close loopholes before raising rates.
-d9|Public-private partnerships should include strict accountability rules.
-e9|Competition and regulation should work together, not as opposites.
-f9|Trade policy should protect labor and environmental standards.
-g9|Police budgets should prioritize de-escalation and training.
-h9|Data privacy should be a fundamental right.
-i9|Citizens should have strong rights against unreasonable searches.
-j9|Government should not police harmless personal behavior.
-k9|Community organizations should share power in local governance.
-l9|Migration policy should respect humanitarian obligations.
-a10|Universal basic income should be tested at meaningful scale.
-b10|Co-determination can improve firm productivity and fairness.
-c10|Public transit should be prioritized over highway expansion.
-d10|Patents should balance innovation incentives with public access.
-e10|Central banks should consider employment alongside inflation.
-f10|Fiscal policy should respond aggressively during recessions.
-g10|Criminal justice should reduce pretrial detention.
-h10|Jury and due-process protections should be strengthened.
-i10|School curricula should encourage critical thinking about authority.
-j10|Open government records should be easy to access.
-k10|Municipal autonomy should be protected from central interference.
-l10|Voluntary associations should solve problems before state coercion.
-a11|Community land trusts can improve long-term housing affordability.
-b11|Mutual aid networks should complement formal welfare systems.
-c11|Smaller firms should face fewer barriers to market entry.
-d11|Regulation should be simple, predictable, and easy to comply with.
-e11|Innovation policy should support open standards and interoperability.
-f11|People should be free to choose among diverse work arrangements.
-g11|Nonviolent civil disobedience is sometimes morally justified.
-h11|Drug decriminalization should be paired with treatment access.
-i11|The state should not enforce a single moral doctrine.
-j11|Individuals should control their personal data and digital identity.
-k11|Voluntary civic service is preferable to compulsory service.
-l11|Pluralism is a strength even when it creates social friction.
-a12|Economic policy should favor decentralized cooperative experimentation.
-b12|Local communities should control more public spending decisions.
-c12|People should be free to start enterprises with minimal licensing.
-d12|Cross-border movement should be easier for work and study.
-e12|Most speech should remain legal unless it directly incites violence.
-f12|Victimless activities should not be criminal offenses.
-g12|Individuals should be free to refuse state-mandated values.
-h12|Privacy tools should be legal and widely accessible.
-i12|Power should be dispersed across institutions to prevent domination.
-j12|Community self-governance should be preferred where feasible.
-k12|Markets can coordinate many choices better than central planning.
-l12|The state should intervene only when clearly necessary.
-`;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
-const SIMPLE_RAW_STATEMENTS = `
-a1|The government should do more to reduce income inequality.
-b1|Large corporations have too much power.
-c1|Healthcare should be guaranteed for everyone.
-d1|Public services should be funded even if taxes increase.
-e1|Private markets usually solve problems better than governments.
-f1|People should mostly keep what they earn.
-a2|Strong law enforcement makes society safer.
-b2|Government surveillance is acceptable for security.
-c2|Free speech should be protected even for offensive opinions.
-d2|People should have broad freedom in personal lifestyle choices.
-e2|Tradition should have a strong role in public life.
-f2|Social change is usually good for society.
-a3|Immigration should be more open.
-b3|National borders should be enforced more strictly.
-c3|International cooperation is more important than national interests.
-d3|Military strength should be a top national priority.
-e3|Climate regulation should be strict even if it slows economic growth.
-f3|Economic growth is more important than environmental regulation.
-a4|Unions are good for workers and society.
-b4|Welfare systems create long-term dependency.
-c4|Religion should have little influence on government policy.
-d4|Schools should focus more on civic discipline and obedience.
-e4|Drug policy should focus more on decriminalization than punishment.
-f4|Markets should decide prices and wages with minimal state intervention.
-`;
+function asStringArray(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return input.filter((item): item is string => typeof item === "string");
+}
+
+function condenseProfileName(
+  rawName: string,
+  axis: { econ: number; social: number; conviction_pct: number; coherence_pct: number },
+): string {
+  const trimmed = rawName.trim();
+  const compact = trimmed
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const ruleMap: Array<{ re: RegExp; bucket: CondensedProfileName }> = [
+    { re: /(welfare|social|equality|redistrib|left|worker)/, bucket: "Välfärdsprogressiv" },
+    { re: /(market|liberal|entrepreneur|deregulat|business|right)/, bucket: "Marknadsliberal" },
+    { re: /(order|security|authority|law|discipline)/, bucket: "Ordningskonservativ" },
+    { re: /(green|climate|sustain|ecolog)/, bucket: "Grön reformist" },
+    { re: /(civil|rights|plural|open|integration|libert)/, bucket: "Socialliberal" },
+    { re: /(national|tradition|sovereign|patriot|culture)/, bucket: "Nationell konservativ" },
+    { re: /(decentral|local|referendum|participat)/, bucket: "Demokratisk decentralist" },
+  ];
+
+  for (const rule of ruleMap) {
+    if (rule.re.test(compact)) {
+      return rule.bucket;
+    }
+  }
+
+  if (axis.social >= 4.5) {
+    return axis.econ >= 2 ? "Ordningskonservativ" : "Nationell konservativ";
+  }
+  if (axis.social <= -4.5) {
+    return axis.econ <= -2 ? "Välfärdsprogressiv" : "Socialliberal";
+  }
+  if (axis.econ <= -4.5) {
+    return "Välfärdsprogressiv";
+  }
+  if (axis.econ >= 4.5) {
+    return "Marknadsliberal";
+  }
+  if (axis.conviction_pct >= 70 && axis.coherence_pct >= 65) {
+    return "Grön reformist";
+  }
+
+  return "Pragmatisk mitten";
+}
+
+export function parseLLMProcessedOutput(input: unknown): LLMProcessedOutput | null {
+  if (!isRecord(input)) {
+    return null;
+  }
+
+  const summary = input.respondent_summary;
+  const axisScores = input.axis_scores;
+  const communication = input.communication_strategy;
+  const checks = input.machine_checks;
+
+  if (!isRecord(summary) || !isRecord(axisScores) || !isRecord(communication) || !isRecord(checks)) {
+    return null;
+  }
+
+  const confidence = summary.confidence_level;
+  if (confidence !== "low" && confidence !== "medium" && confidence !== "high") {
+    return null;
+  }
+
+  const rawDominant = Array.isArray(input.dominant_patterns) ? input.dominant_patterns : [];
+  const dominant_patterns = rawDominant
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item) => ({
+      pattern: typeof item.pattern === "string" ? item.pattern : "",
+      evidence_question_ids: asStringArray(item.evidence_question_ids),
+      interpretation: typeof item.interpretation === "string" ? item.interpretation : "",
+    }))
+    .filter((item) => item.pattern && item.interpretation);
+
+  const rawTensions = Array.isArray(input.tensions_and_contradictions) ? input.tensions_and_contradictions : [];
+  const tensions_and_contradictions = rawTensions
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item) => {
+      const pair = Array.isArray(item.question_pair) ? item.question_pair : [];
+      const severityRaw = item.severity;
+      const severity: "low" | "medium" | "high" =
+        severityRaw === "low" || severityRaw === "medium" || severityRaw === "high" ? severityRaw : "low";
+      return {
+        tension: typeof item.tension === "string" ? item.tension : "",
+        question_pair: [String(pair[0] ?? ""), String(pair[1] ?? "")] as [string, string],
+        severity,
+      };
+    })
+    .filter((item) => item.tension && item.question_pair[0] && item.question_pair[1]);
+
+  const rawPriorities = Array.isArray(input.policy_priorities_inferred) ? input.policy_priorities_inferred : [];
+  const policy_priorities_inferred = rawPriorities
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item) => {
+      const directionRaw = item.direction;
+      const direction: "expand" | "reform" | "reduce" =
+        directionRaw === "expand" || directionRaw === "reform" || directionRaw === "reduce" ? directionRaw : "reform";
+      return {
+        priority: typeof item.priority === "string" ? item.priority : "",
+        direction,
+        confidence: typeof item.confidence === "number" ? clamp(item.confidence, 0, 1) : 0,
+      };
+    })
+    .filter((item) => item.priority);
+
+  const result: LLMProcessedOutput = {
+    respondent_summary: {
+      profile_name: condenseProfileName(
+        typeof summary.profile_name === "string" ? summary.profile_name : "",
+        {
+          econ: typeof axisScores.econ === "number" ? clamp(axisScores.econ, -10, 10) : 0,
+          social: typeof axisScores.social === "number" ? clamp(axisScores.social, -10, 10) : 0,
+          coherence_pct: typeof axisScores.coherence_pct === "number" ? clamp(axisScores.coherence_pct, 0, 100) : 0,
+          conviction_pct: typeof axisScores.conviction_pct === "number" ? clamp(axisScores.conviction_pct, 0, 100) : 0,
+        },
+      ),
+      confidence_level: confidence,
+      core_identity: typeof summary.core_identity === "string" ? summary.core_identity : "",
+      economic_position: typeof summary.economic_position === "string" ? summary.economic_position : "",
+      social_position: typeof summary.social_position === "string" ? summary.social_position : "",
+    },
+    axis_scores: {
+      econ: typeof axisScores.econ === "number" ? clamp(axisScores.econ, -10, 10) : 0,
+      social: typeof axisScores.social === "number" ? clamp(axisScores.social, -10, 10) : 0,
+      extremity_pct: typeof axisScores.extremity_pct === "number" ? clamp(axisScores.extremity_pct, 0, 100) : 0,
+      coherence_pct: typeof axisScores.coherence_pct === "number" ? clamp(axisScores.coherence_pct, 0, 100) : 0,
+      conviction_pct: typeof axisScores.conviction_pct === "number" ? clamp(axisScores.conviction_pct, 0, 100) : 0,
+    },
+    dominant_patterns,
+    tensions_and_contradictions,
+    policy_priorities_inferred,
+    communication_strategy: {
+      framing_style: typeof communication.framing_style === "string" ? communication.framing_style : "",
+      messages_to_avoid: asStringArray(communication.messages_to_avoid),
+      likely_resonant_themes: asStringArray(communication.likely_resonant_themes),
+    },
+    machine_checks: {
+      used_all_questions: checks.used_all_questions === true,
+      hallucination_free: checks.hallucination_free === true,
+      language_neutrality_observed: checks.language_neutrality_observed === true,
+    },
+  };
+
+  if (!result.respondent_summary.profile_name || !result.respondent_summary.core_identity) {
+    return null;
+  }
+
+  return result;
+}
+
+export const SCALE_LABELS: Record<LanguageCode, Array<{ label: string; value: AnswerValue }>> = {
+  en: [
+    { label: "Strongly disagree", value: -2 },
+    { label: "Disagree", value: -1 },
+    { label: "Neutral", value: 0 },
+    { label: "Agree", value: 1 },
+    { label: "Strongly agree", value: 2 },
+  ],
+  sv: [
+    { label: "Instämmer inte alls", value: -2 },
+    { label: "Instämmer inte", value: -1 },
+    { label: "Neutral", value: 0 },
+    { label: "Instämmer", value: 1 },
+    { label: "Instämmer helt", value: 2 },
+  ],
+};
+
+export const SWEDISH_RIKSDAG_PARTIES: Array<{ id: string; text: LocalizedText }> = [
+  { id: "socialdemokraterna", text: { en: "Social Democrats", sv: "Socialdemokraterna" } },
+  { id: "moderaterna", text: { en: "Moderates", sv: "Moderaterna" } },
+  { id: "sverigedemokraterna", text: { en: "Sweden Democrats", sv: "Sverigedemokraterna" } },
+  { id: "centerpartiet", text: { en: "Centre Party", sv: "Centerpartiet" } },
+  { id: "vansterpartiet", text: { en: "Left Party", sv: "Vänsterpartiet" } },
+  { id: "kristdemokraterna", text: { en: "Christian Democrats", sv: "Kristdemokraterna" } },
+  { id: "liberalerna", text: { en: "Liberals", sv: "Liberalerna" } },
+  { id: "miljopartiet", text: { en: "Green Party", sv: "Miljöpartiet de gröna" } },
+  { id: "feministiskt_initiativ", text: { en: "Feminist Initiative", sv: "Feministiskt initiativ" } },
+  { id: "piratpartiet", text: { en: "Pirate Party", sv: "Piratpartiet" } },
+  { id: "partiet_nyans", text: { en: "Nyans", sv: "Partiet Nyans" } },
+  { id: "medborgerlig_samling", text: { en: "Citizens' Coalition", sv: "Medborgerlig Samling" } },
+  { id: "alternativ_for_sverige", text: { en: "Alternative for Sweden", sv: "Alternativ för Sverige" } },
+  { id: "direktdemokraterna", text: { en: "Direct Democrats", sv: "Direktdemokraterna" } },
+  { id: "enhet", text: { en: "Unity", sv: "Enhet" } },
+  { id: "klassiska_liberala_partiet", text: { en: "Classical Liberal Party", sv: "Klassiska liberala partiet" } },
+  { id: "knapptryckarna", text: { en: "Button Pressers", sv: "Knapptryckarna" } },
+  { id: "mod", text: { en: "MoD", sv: "MoD" } },
+  { id: "spi_valfarden", text: { en: "SPI Welfare", sv: "SPI Välfärden" } },
+  { id: "sveriges_kommunistiska_parti", text: { en: "Communist Party of Sweden", sv: "Sveriges Kommunistiska Parti" } },
+  { id: "basinkomstpartiet", text: { en: "Basic Income Party", sv: "Basinkomstpartiet" } },
+  { id: "klimatalliansen", text: { en: "Climate Alliance", sv: "Klimatalliansen" } },
+  { id: "nya_nybrottspartiet", text: { en: "New New Deal Party", sv: "Nya Nybrottspartiet" } },
+  { id: "oberoende_realister", text: { en: "Independent Realists", sv: "Oberoende Realister" } },
+];
+
+export function getSwedishParties() {
+  return SWEDISH_RIKSDAG_PARTIES;
+}
+
+export function isKnownSwedishParty(input: string): boolean {
+  return SWEDISH_RIKSDAG_PARTIES.some((party) => party.id === input);
+}
+
+const QUESTIONS: Question[] = [
+  {
+    id: "g1",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "The state should guarantee equal quality welfare in every municipality.",
+      sv: "Staten bör garantera likvärdig välfärd i varje kommun.",
+    },
+    econTilt: -1.4,
+    socialTilt: 0.3,
+  },
+  {
+    id: "g2",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "Regions should have more freedom even if national policy becomes less uniform.",
+      sv: "Regioner bör få större frihet aven om nationell politik blir mindre tydlig.",
+    },
+    econTilt: 0.6,
+    socialTilt: -0.8,
+  },
+  {
+    id: "g3",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "Public finances should prioritize low debt even if reforms are delayed.",
+      sv: "Offentliga finanser bör prioritera låg skuld även om ändring försenas.",
+    },
+    econTilt: 1.5,
+    socialTilt: 0.4,
+  },
+  {
+    id: "g4",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "The state should actively reduce income and wealth gaps.",
+      sv: "Staten bör aktivt minska inkomst- och förmögenhetsklyftor.",
+    },
+    econTilt: -1.9,
+    socialTilt: -0.1,
+  },
+  {
+    id: "g5",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "Sweden should tighten laws quickly when public order is threatened.",
+      sv: "Sverige bör snabbt skärpa lagar när allmän ordning hotas.",
+    },
+    econTilt: 0.1,
+    socialTilt: 1.8,
+  },
+  {
+    id: "g6",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "Freedom of speech should be protected strongly, even for offensive opinions.",
+      sv: "Yttrandefriheten bör skyddas starkt, även för ståndpunkter som uppfattas stötande.",
+    },
+    econTilt: 0,
+    socialTilt: -1.8,
+  },
+  {
+    id: "g7",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "More major political decisions should be made through referendums.",
+      sv: "Fler stora politiska beslut bör avgöras genom folkomröstningar.",
+    },
+    econTilt: -0.1,
+    socialTilt: -1.2,
+  },
+  {
+    id: "g8",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "The state should monitor critical infrastructure in real time to prevent attacks.",
+      sv: "Staten bör övervaka kritisk infrastruktur i realtid for att förebygga attacker.",
+    },
+    econTilt: -0.2,
+    socialTilt: 1.5,
+  },
+  {
+    id: "g9",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "EU cooperation should have higher priority than absolute national sovereignty.",
+      sv: "EU-samarbete bör prioriteras högre än absolut nationell suveränitet.",
+    },
+    econTilt: -0.2,
+    socialTilt: -0.8,
+  },
+  {
+    id: "g10",
+    kind: "likert",
+    category: "general",
+    text: {
+      en: "Sweden should prioritize self-sufficiency in essential goods over cheapest imports.",
+      sv: "Sverige bör prioritera självförsörjning av samhällsviktiga varor framför billigaste import.",
+    },
+    econTilt: -0.7,
+    socialTilt: 1.1,
+  },
+  {
+    id: "p1",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "If the state gets 20 billion SEK extra, where should it go first?",
+      sv: "Om staten får 20 miljarder kronor extra, vart bör de gå först?",
+    },
+    options: [
+      {
+        id: "healthcare_staffing",
+        text: { en: "Hire more healthcare staff", sv: "Anställa fler i sjukvården" },
+        econ: -1.9,
+        social: -0.1,
+        emphasis: 1,
+      },
+      {
+        id: "defense_readiness",
+        text: { en: "Military and civil defense readiness", sv: "Militär och civil beredskap" },
+        econ: 0.8,
+        social: 1.7,
+        emphasis: 1,
+      },
+      {
+        id: "tax_cut_work_income",
+        text: { en: "Lower taxes on work income", sv: "Sänkt skatt på arbete" },
+        econ: 1.8,
+        social: 0.1,
+        emphasis: 1,
+      },
+      {
+        id: "municipal_equalization",
+        text: { en: "Equalize welfare between municipalities", sv: "Jämna ut välfarden mellan kommuner" },
+        econ: -1.7,
+        social: 0.5,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p2",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "How should Sweden handle high inflation and weak growth at the same time?",
+      sv: "Hur bör Sverige hantera hög inflation och svag tillväxt samtidigt?",
+    },
+    options: [
+      {
+        id: "tight_budget",
+        text: { en: "Tight fiscal policy and spending restraint", sv: "Stram finanspolitik och utgiftskontroll" },
+        econ: 1.1,
+        social: 0.6,
+        emphasis: 1,
+      },
+      {
+        id: "targeted_cost_relief",
+        text: { en: "Targeted support to vulnerable households", sv: "Riktat stöd till utsatta hushåll" },
+        econ: -1.4,
+        social: -0.1,
+        emphasis: 1,
+      },
+      {
+        id: "temporary_price_caps",
+        text: { en: "Temporary price caps on essential goods", sv: "Tillfälliga pristak på nödvändiga varor" },
+        econ: -1.9,
+        social: 1,
+        emphasis: 1,
+      },
+      {
+        id: "growth_reforms",
+        text: { en: "Deregulation and growth-oriented tax reforms", sv: "Avreglering och tillväxtinriktade skattereformer" },
+        econ: 1.8,
+        social: 0.2,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p3",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "What should housing policy focus on first?",
+      sv: "Vad bör bostadspolitiken fokusera pa först?",
+    },
+    options: [
+      {
+        id: "state_backed_rentals",
+        text: { en: "Expand municipally owned rentals", sv: "Bygg ut allmännyttiga hyresrätter" },
+        econ: -1.8,
+        social: 0,
+        emphasis: 1,
+      },
+      {
+        id: "faster_permits",
+        text: { en: "Faster permits and simpler planning rules", sv: "Snabbare tillstånd och enklare planregler" },
+        econ: 1.3,
+        social: -0.1,
+        emphasis: 1,
+      },
+      {
+        id: "stronger_rent_controls",
+        text: { en: "Stronger rent regulation", sv: "Starkare hyresreglering" },
+        econ: -2,
+        social: 0.6,
+        emphasis: 1,
+      },
+      {
+        id: "ownership_market",
+        text: { en: "Support private ownership and market rents", sv: "Stöd privat ägande och mer marknadshyror" },
+        econ: 1.4,
+        social: 0.4,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p4",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "Which migration line should Sweden prioritize now?",
+      sv: "Vilken migrationslinje bör Sverige prioritera nu?",
+    },
+    options: [
+      {
+        id: "integration_investment",
+        text: { en: "Higher investment in integration and legal routes", sv: "Större satsning på integration och lagliga vägar" },
+        econ: -0.9,
+        social: -1.6,
+        emphasis: 1,
+      },
+      {
+        id: "balanced_quota",
+        text: { en: "Balanced yearly refugee and labor quotas", sv: "Balanserad årlig flykting- och arbetskraftskvot" },
+        econ: 0,
+        social: -0.3,
+        emphasis: 1,
+      },
+      {
+        id: "strict_border_policy",
+        text: { en: "Stricter borders and lower asylum intake", sv: "Striktare gränser och lägre asylmottagande" },
+        econ: 0.7,
+        social: 1.7,
+        emphasis: 1,
+      },
+      {
+        id: "skills_points_system",
+        text: { en: "Skills-based points system with strict requirements", sv: "Kompetensbaserat poängsystem med tydliga krav" },
+        econ: 1.1,
+        social: 0.6,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p5",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "What should come first to reduce gang violence?",
+      sv: "Vad bör komma först for att minska gängvåld?",
+    },
+    options: [
+      {
+        id: "social_prevention",
+        text: { en: "Large prevention programs in schools and neighborhoods", sv: "Stora förebyggande insatser i skola och bostadsområden" },
+        econ: -0.9,
+        social: -1.1,
+        emphasis: 1,
+      },
+      {
+        id: "targeted_policing",
+        text: { en: "Targeted policing and witness protection", sv: "Riktat polisarbete och starkare vittnesskydd" },
+        econ: 0.1,
+        social: 0.9,
+        emphasis: 1,
+      },
+      {
+        id: "harsher_sentences",
+        text: { en: "Longer sentences and lower age thresholds", sv: "Längre straff och lägre myndighetsålder i straffrätt" },
+        econ: 0.5,
+        social: 1.8,
+        emphasis: 1,
+      },
+      {
+        id: "expanded_surveillance",
+        text: { en: "Expanded surveillance and data-driven control", sv: "Utbyggd övervakning och datadriven kontroll" },
+        econ: 0.2,
+        social: 0.9,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p6",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "Which climate and energy strategy should lead?",
+      sv: "Vilken klimat- och energistrategi bör leda?",
+    },
+    options: [
+      {
+        id: "state_green_investment",
+        text: { en: "Large state-led green investments", sv: "Stora statligt ledda gröna investeringar" },
+        econ: -1.7,
+        social: -0.4,
+        emphasis: 1,
+      },
+      {
+        id: "carbon_pricing_rebate",
+        text: { en: "Higher carbon pricing with household rebates", sv: "Högre koldioxidpris med återbäring till hushåll" },
+        econ: -0.2,
+        social: -0.3,
+        emphasis: 1,
+      },
+      {
+        id: "market_innovation",
+        text: { en: "Market-led innovation with fewer subsidies", sv: "Marknadsdriven innovation med mindre subventioner" },
+        econ: 1.7,
+        social: -0.1,
+        emphasis: 1,
+      },
+      {
+        id: "security_and_nuclear",
+        text: { en: "Energy security first, including faster nuclear expansion", sv: "Energisäkerhet först, inklusive snabbare kärnkraftsutbyggnad" },
+        econ: 1.2,
+        social: 1.2,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p7",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "What should schools prioritize most?",
+      sv: "Vad bör skolan prioritera mest?",
+    },
+    options: [
+      {
+        id: "equity_support",
+        text: { en: "Equal resources and stronger support for weak schools", sv: "Likvärdiga resurser och starkare stöd till svaga skolor" },
+        econ: -1.2,
+        social: -0.7,
+        emphasis: 1,
+      },
+      {
+        id: "knowledge_and_order",
+        text: { en: "Clear knowledge goals and stronger classroom order", sv: "Tydliga kunskapsmål och starkare klassrumsordning" },
+        econ: 0.1,
+        social: 0.8,
+        emphasis: 1,
+      },
+      {
+        id: "school_choice_market",
+        text: { en: "School choice and competition between providers", sv: "Skolval och konkurrens mellan utförare" },
+        econ: 1.6,
+        social: 0.3,
+        emphasis: 1,
+      },
+      {
+        id: "nationalized_school_model",
+        text: { en: "A more centralized, national school model", sv: "En mer centraliserad nationell skolmodell" },
+        econ: -0.8,
+        social: 1.2,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p8",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "How should digital policy handle platforms and privacy?",
+      sv: "Hur bör digitalpolitiken hantera plattformar och integritet?",
+    },
+    options: [
+      {
+        id: "strict_platform_rules",
+        text: { en: "Strong regulation and algorithm audits", sv: "Stark reglering och algoritmgranskning" },
+        econ: -1.5,
+        social: 0.7,
+        emphasis: 1,
+      },
+      {
+        id: "privacy_rights",
+        text: { en: "Prioritize user privacy and digital rights", sv: "Prioritera användarintegritet och digitala rättigheter" },
+        econ: -0.4,
+        social: -1.7,
+        emphasis: 1,
+      },
+      {
+        id: "industry_self_regulation",
+        text: { en: "Mostly industry self-regulation", sv: "Främst branschens självreglering" },
+        econ: 1.7,
+        social: 0.3,
+        emphasis: 1,
+      },
+      {
+        id: "state_control_online",
+        text: { en: "Expanded state control over online harmful content", sv: "Utökad statlig kontroll över skadligt onlineinnehåll" },
+        econ: -0.6,
+        social: 1.9,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p9",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "Which tax reform should come first?",
+      sv: "Vilken skattereform bör komma först?",
+    },
+    options: [
+      {
+        id: "wealth_and_capital_tax",
+        text: { en: "Higher tax on large wealth and capital", sv: "Högre skatt på stora förmögenheter och kapital" },
+        econ: -2,
+        social: 0.1,
+        emphasis: 1,
+      },
+      {
+        id: "earned_income_relief",
+        text: { en: "Lower tax for low and middle earned incomes", sv: "Lägre skatt på låga och medelhöga arbetsinkomster" },
+        econ: -0.6,
+        social: -0.1,
+        emphasis: 1,
+      },
+      {
+        id: "entrepreneurship_tax_relief",
+        text: { en: "Lower tax for entrepreneurs and investors", sv: "Lägre skatt för entreprenörer och investerare" },
+        econ: 1.8,
+        social: 0.1,
+        emphasis: 1,
+      },
+      {
+        id: "flat_broad_tax",
+        text: { en: "Simpler broad tax base with flatter rates", sv: "Enklare bred skattebas med plattare skattesatser" },
+        econ: 0.2,
+        social: 0.5,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "p10",
+    kind: "single",
+    category: "single_priority",
+    text: {
+      en: "What should be the first democratic reform?",
+      sv: "Vad bör vara första demokratiska reformen?",
+    },
+    options: [
+      {
+        id: "citizens_assemblies",
+        text: { en: "Citizen assemblies tied to parliament", sv: "Medborgarförsamlingar kopplade till riksdagen" },
+        econ: -0.4,
+        social: -1.5,
+        emphasis: 1,
+      },
+      {
+        id: "stronger_anti_corruption",
+        text: { en: "Stronger anti-corruption and transparency watchdogs", sv: "Starkare antikorruption och transparensgranskning" },
+        econ: -0.2,
+        social: -0.7,
+        emphasis: 1,
+      },
+      {
+        id: "executive_capacity",
+        text: { en: "Stronger executive powers for faster decisions", sv: "Starkare regeringsmakt for snabbare beslut" },
+        econ: 0.4,
+        social: 1.5,
+        emphasis: 1,
+      },
+      {
+        id: "constitutional_stability",
+        text: { en: "Keep constitutional rules stable and difficult to change", sv: "Hålla grundlagens regler stabila och svåra att ändra" },
+        econ: 0.6,
+        social: 1.2,
+        emphasis: 1,
+      },
+    ],
+  },
+  {
+    id: "l1",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "Profit in tax-funded welfare should be strictly limited.",
+      sv: "Vinster i skattefinansierad välfärd bör begransas kraftigt.",
+    },
+    econTilt: -2,
+    socialTilt: 0.2,
+  },
+  {
+    id: "l2",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "Union influence should increase in wage-setting and labor law.",
+      sv: "Fackligt inflytande bör oka i lönebildning och arbetsrätt.",
+    },
+    econTilt: -1.7,
+    socialTilt: -0.2,
+  },
+  {
+    id: "l3",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "The state should build large amounts of affordable rental housing.",
+      sv: "Staten bör bygga stora mängder prisvärda hyresrätter.",
+    },
+    econTilt: -1.7,
+    socialTilt: 0,
+  },
+  {
+    id: "l4",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "Progressive taxation should increase to finance welfare expansion.",
+      sv: "Progressiv beskattning bör öka for att finansiera utbyggd välfärd.",
+    },
+    econTilt: -1.9,
+    socialTilt: 0,
+  },
+  {
+    id: "l5",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "Public ownership should expand in rail, energy grids, and critical infrastructure.",
+      sv: "Offentligt ägande bör öka inom järnväg, elnät och kritisk infrastruktur.",
+    },
+    econTilt: -1.8,
+    socialTilt: 0.5,
+  },
+  {
+    id: "l6",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "A six-hour workday should be tested nationally in public sectors.",
+      sv: "Sex timmars arbetsdag bör provas nationellt i offentlig sektor.",
+    },
+    econTilt: -1.3,
+    socialTilt: -0.4,
+  },
+  {
+    id: "l7",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "Climate transition costs should be borne primarily by high emitters and high-income groups.",
+      sv: "Klimatomställningens kostnader bör bäras främst av stora utsläppare och höginkomsttagare.",
+    },
+    econTilt: -1.4,
+    socialTilt: -0.4,
+  },
+  {
+    id: "l8",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "Sick leave and unemployment insurance should be expanded even with higher taxes.",
+      sv: "Sjukförsäkring och a-kassa bör byggas ut även med högre skattetryck.",
+    },
+    econTilt: -1.8,
+    socialTilt: -0.1,
+  },
+  {
+    id: "l9",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "The state should reintroduce stronger taxes on large inheritances and capital.",
+      sv: "Staten bör återinföra starkare beskattning av stora arv och kapital.",
+    },
+    econTilt: -1.9,
+    socialTilt: 0.2,
+  },
+  {
+    id: "l10",
+    kind: "likert",
+    category: "left_leaning",
+    text: {
+      en: "The public sector should be the default provider for core welfare services.",
+      sv: "Offentlig sektor bör vara huvudalternativet for central välfärd.",
+    },
+    econTilt: -1.6,
+    socialTilt: 0.3,
+  },
+  {
+    id: "r1",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Lower taxes and stronger market incentives are the best path to growth.",
+      sv: "Lägre skatter och starkare marknadsincitament är bästa vägen till tillväxt.",
+    },
+    econTilt: 2,
+    socialTilt: 0.2,
+  },
+  {
+    id: "r2",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Labor law should be made more flexible for employers.",
+      sv: "Arbetsrätten bör bli mer flexibel för arbetsgivare.",
+    },
+    econTilt: 1.8,
+    socialTilt: 0.1,
+  },
+  {
+    id: "r3",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Criminal policy should prioritize punishment and deterrence over rehabilitation.",
+      sv: "Kriminalpolitiken bör prioritera straff och avskräckning framför rehabilitering.",
+    },
+    econTilt: 0.3,
+    socialTilt: 1.8,
+  },
+  {
+    id: "r4",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Border controls should remain strict even if labor shortages increase.",
+      sv: "Gränskontroller bör förbli strikta även om arbetskraftsbrist ökar.",
+    },
+    econTilt: 0.5,
+    socialTilt: 1.9,
+  },
+  {
+    id: "r5",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Energy reliability and industrial competitiveness should come before stricter climate goals.",
+      sv: "Trygg energiförsörjning och industrins konkurrenskraft bör gå före skarpta klimatmål.",
+    },
+    econTilt: 1.2,
+    socialTilt: 1.1,
+  },
+  {
+    id: "r6",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Free school choice and independent schools should be protected and expanded.",
+      sv: "Fritt skolval och friskolor bör skyddas och byggas ut.",
+    },
+    econTilt: 1.7,
+    socialTilt: 0.6,
+  },
+  {
+    id: "r7",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Regulation should be reduced even if it weakens some labor and environmental protections.",
+      sv: "Regler bör minskas aven om vissa arbets- och miljöskydd forsvagas.",
+    },
+    econTilt: 1.8,
+    socialTilt: 0.7,
+  },
+  {
+    id: "r8",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Policy should actively defend Swedish cultural traditions in public institutions.",
+      sv: "Politiken bör aktivt forsvara svenska kulturtraditioner i offentliga institutioner.",
+    },
+    econTilt: 0.2,
+    socialTilt: 1.7,
+  },
+  {
+    id: "r9",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "Public benefits should require stricter activity and residency conditions.",
+      sv: "Offentliga bidrag bör kräva strängare aktivitets- och bosättningsvillkor.",
+    },
+    econTilt: 1.3,
+    socialTilt: 1.1,
+  },
+  {
+    id: "r10",
+    kind: "likert",
+    category: "right_leaning",
+    text: {
+      en: "National defense and domestic control should outweigh supranational constraints.",
+      sv: "Nationellt försvar och inhemsk kontroll bör väga tyngre än överstatliga begränsningar.",
+    },
+    econTilt: 0.9,
+    socialTilt: 1.8,
+  },
+];
 
 const ARCHETYPES = [
   { name: "Libertarian Left", description: "Socially libertarian with redistributive economics", x: -6.5, y: -6.5 },
@@ -274,47 +1164,15 @@ const ARCHETYPES = [
   { name: "Order Conservative", description: "Strong law/order preference", x: 0, y: 7 },
 ];
 
-function toStatement(line: string): Statement {
-  const [id, text] = line.split("|");
-  const colLetter = id[0] ?? "a";
-  const row = Number(id.slice(1));
-  const col = LETTERS.indexOf(colLetter) + 1;
+const CATEGORY_ORDER: QuestionCategory[] = ["general", "single_priority", "left_leaning", "right_leaning"];
 
-  return {
-    id,
-    text,
-    col,
-    row,
-    x: col - 6.5,
-    y: 6.5 - row,
+const QUESTION_GRID: Record<string, { col: number; row: number }> = QUESTIONS.reduce((acc, question, index) => {
+  acc[question.id] = {
+    col: (index % 10) + 1,
+    row: Math.floor(index / 10) + 1,
   };
-}
-
-function simplifyAdvancedText(text: string): string {
-  return text
-    .replace(/"/g, "")
-    .replace(/Stans\s+/gi, "Supports ")
-    .replace(/\bNazbol\b/gi, "National Bolshevik")
-    .replace(/\bMAGA\b/g, "supports MAGA politics")
-    .replace(/\bQAnon\b/g, "QAnon")
-    .replace(/\b4chan\b/g, "4chan")
-    .replace(/\bUwU\b/g, "anime/internet culture")
-    .replace(/\bBLM\b/g, "BLM")
-    .replace(/\bLGBTQ\b/g, "LGBTQ+");
-}
-
-export const ADVANCED_STATEMENTS: Statement[] = ADVANCED_RAW_STATEMENTS.trim()
-  .split("\n")
-  .map(toStatement)
-  .map((statement) => ({ ...statement, text: simplifyAdvancedText(statement.text) }));
-
-export const SIMPLE_STATEMENTS: Statement[] = SIMPLE_RAW_STATEMENTS.trim().split("\n").map(toStatement);
-
-export function getStatements(mode: QuestionnaireMode = "advanced"): Statement[] {
-  return mode === "simple" ? SIMPLE_STATEMENTS : ADVANCED_STATEMENTS;
-}
-
-export const STATEMENTS = ADVANCED_STATEMENTS;
+  return acc;
+}, {} as Record<string, { col: number; row: number }>);
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -351,21 +1209,6 @@ function zScore(value: number, avg: number, sigma: number): number {
   return (value - avg) / sigma;
 }
 
-export function sanitizeAnswerValue(value: number): AnswerValue {
-  const rounded = Math.round(value);
-  return clamp(rounded, -2, 2) as AnswerValue;
-}
-
-export function normalizeAnswers(input: Record<string, number | undefined>, mode: QuestionnaireMode = "advanced"): AnswerMap {
-  const statements = getStatements(mode);
-  const out: AnswerMap = {};
-  for (const statement of statements) {
-    const value = input[statement.id];
-    out[statement.id] = sanitizeAnswerValue(value ?? 0);
-  }
-  return out;
-}
-
 function axisDescriptor(score: number, left: string, right: string): string {
   if (score <= -3) {
     return left;
@@ -393,107 +1236,225 @@ function nearestArchetype(econ: number, social: number) {
   };
 }
 
+export function getQuestions(): Question[] {
+  return QUESTIONS;
+}
+
+export function getStatements(mode: QuestionnaireMode = "advanced"): Statement[] {
+  void mode;
+  return QUESTIONS.map((question) => {
+    const grid = QUESTION_GRID[question.id];
+    const text = question.text.en;
+    return {
+      id: question.id,
+      text,
+      col: grid.col,
+      row: grid.row,
+      x: grid.col - 5.5,
+      y: 2.5 - grid.row,
+    };
+  });
+}
+
+export function sanitizeAnswerValue(value: number): AnswerValue {
+  const rounded = Math.round(value);
+  return clamp(rounded, -2, 2) as AnswerValue;
+}
+
+function optionNumericValue(question: SingleChoiceQuestion, optionId: string): number {
+  const index = question.options.findIndex((option) => option.id === optionId);
+  if (index < 0) {
+    return 0;
+  }
+  const center = (question.options.length - 1) / 2;
+  return (index - center) * (4 / Math.max(question.options.length - 1, 1));
+}
+
+export function normalizeAnswers(
+  input: Record<string, number | string | undefined>,
+  mode: QuestionnaireMode = "advanced",
+): AnswerMap {
+  void mode;
+  const out: AnswerMap = {};
+
+  for (const question of QUESTIONS) {
+    const raw = input[question.id];
+    if (question.kind === "likert") {
+      out[question.id] = sanitizeAnswerValue(typeof raw === "number" ? raw : 0);
+      continue;
+    }
+
+    const selected = typeof raw === "string" ? raw : "";
+    const isValid = question.options.some((option) => option.id === selected);
+    out[question.id] = isValid ? selected : question.options[0].id;
+  }
+
+  return out;
+}
+
+function responseToPoint(question: Question, answer: AnswerValue | string): ResponsePoint {
+  if (question.kind === "likert") {
+    const value = typeof answer === "number" ? answer : 0;
+    const label = SCALE_LABELS.en.find((scale) => scale.value === value)?.label ?? "Neutral";
+    return {
+      questionId: question.id,
+      category: question.category,
+      kind: "likert",
+      text: question.text,
+      answer: { en: label, sv: label },
+      numericValue: value,
+      econContribution: value * question.econTilt,
+      socialContribution: value * question.socialTilt,
+      emphasis: Math.abs(value),
+    };
+  }
+
+  const option = question.options.find((item) => item.id === answer) ?? question.options[0];
+  return {
+    questionId: question.id,
+    category: question.category,
+    kind: "single",
+    text: question.text,
+    answer: option.text,
+    numericValue: optionNumericValue(question, option.id),
+    econContribution: option.econ,
+    socialContribution: option.social,
+    emphasis: option.emphasis,
+  };
+}
+
+function moments(values: number[]) {
+  if (values.length === 0) {
+    return { skew: 0, kurtosis: 0 };
+  }
+  const avg = mean(values);
+  const sigma = stdDev(values);
+  if (sigma === 0) {
+    return { skew: 0, kurtosis: 0 };
+  }
+  const skew = mean(values.map((value) => ((value - avg) / sigma) ** 3));
+  const kurtosis = mean(values.map((value) => ((value - avg) / sigma) ** 4)) - 3;
+  return { skew, kurtosis };
+}
+
 export function computeAnalysis(answers: AnswerMap, mode: QuestionnaireMode = "advanced"): Analysis {
-  const statements = getStatements(mode);
-  const maxX = statements.reduce((acc, statement) => acc + Math.abs(statement.x) * 2, 0);
-  const maxY = statements.reduce((acc, statement) => acc + Math.abs(statement.y) * 2, 0);
+  void mode;
+  const responsePoints = QUESTIONS.map((question) => responseToPoint(question, answers[question.id]));
 
-  let rawX = 0;
-  let rawY = 0;
-  let intensity = 0;
-  let directionalX = 0;
-  let directionalY = 0;
-  let directionalXAbs = 0;
-  let directionalYAbs = 0;
+  const totalAbsEcon = responsePoints.reduce((acc, point) => acc + Math.abs(point.econContribution), 0);
+  const totalAbsSocial = responsePoints.reduce((acc, point) => acc + Math.abs(point.socialContribution), 0);
+  const rawX = responsePoints.reduce((acc, point) => acc + point.econContribution, 0);
+  const rawY = responsePoints.reduce((acc, point) => acc + point.socialContribution, 0);
+  const econ = totalAbsEcon === 0 ? 0 : clamp((rawX / totalAbsEcon) * 10, -10, 10);
+  const social = totalAbsSocial === 0 ? 0 : clamp((rawY / totalAbsSocial) * 10, -10, 10);
 
-  const values: number[] = [];
-  const maxRow = statements.reduce((acc, statement) => Math.max(acc, statement.row), 1);
-  const maxCol = statements.reduce((acc, statement) => Math.max(acc, statement.col), 1);
-  const rowBuckets = Array.from({ length: maxRow }, () => [] as number[]);
-  const colBuckets = Array.from({ length: maxCol }, () => [] as number[]);
+  const numericValues = responsePoints.map((point) => point.numericValue);
+  const intensityRaw = responsePoints.reduce((acc, point) => acc + point.emphasis, 0);
+  const maxIntensity = responsePoints.reduce((acc, point) => acc + (point.kind === "likert" ? 2 : 1), 0);
+  const intensityPct = maxIntensity === 0 ? 0 : (intensityRaw / maxIntensity) * 100;
+  const distanceFromCenter = Math.sqrt(econ ** 2 + social ** 2);
+  const extremityPct = (distanceFromCenter / Math.sqrt(10 ** 2 + 10 ** 2)) * 100;
+
+  const avg = mean(numericValues);
+  const variance = numericValues.reduce((acc, value) => acc + (value - avg) ** 2, 0) / Math.max(numericValues.length, 1);
+  const stdDeviation = Math.sqrt(variance);
+
+  const bins = new Map<string, number>();
+  for (const point of responsePoints) {
+    const key = point.kind === "likert" ? `lk:${point.numericValue}` : `sg:${point.answer.en}`;
+    bins.set(key, (bins.get(key) ?? 0) + 1);
+  }
+  let entropy = 0;
+  for (const count of bins.values()) {
+    if (count === 0) {
+      continue;
+    }
+    const p = count / responsePoints.length;
+    entropy -= p * Math.log2(p);
+  }
+  const entropyMax = Math.log2(Math.max(bins.size, 1));
+  const entropyPct = entropyMax === 0 ? 0 : (entropy / entropyMax) * 100;
+
+  const coherenceX = totalAbsEcon === 0 ? 0 : (Math.abs(rawX) / totalAbsEcon) * 100;
+  const coherenceY = totalAbsSocial === 0 ? 0 : (Math.abs(rawY) / totalAbsSocial) * 100;
+  const coherenceOverall = (coherenceX + coherenceY) / 2;
+
+  const polarizationIndex = clamp(intensityPct * 0.45 + extremityPct * 0.35 + coherenceOverall * 0.2, 0, 100);
+
+  const moment = moments(numericValues);
+  const convictionIndex = clamp(mean(responsePoints.map((point) => Math.abs(point.numericValue))) / 2 * 100, 0, 100);
+  const predictabilityIndex = clamp((coherenceOverall * 0.6 + (100 - entropyPct) * 0.4), 0, 100);
+  const axisAlignment = clamp(100 - Math.abs(Math.abs(econ) - Math.abs(social)) * 5, 0, 100);
+
+  const categoryScores = CATEGORY_ORDER.reduce((acc, category) => {
+    const bucket = responsePoints.filter((point) => point.category === category);
+    const totalEcon = bucket.reduce((sum, point) => sum + point.econContribution, 0);
+    const totalSocial = bucket.reduce((sum, point) => sum + point.socialContribution, 0);
+    acc[category] = bucket.length === 0 ? 0 : (totalEcon + totalSocial) / bucket.length;
+    return acc;
+  }, {} as Record<QuestionCategory, number>);
+
+  const categoryIntensities = CATEGORY_ORDER.reduce((acc, category) => {
+    const bucket = responsePoints.filter((point) => point.category === category);
+    const total = bucket.reduce((sum, point) => sum + point.emphasis, 0);
+    const max = bucket.reduce((sum, point) => sum + (point.kind === "likert" ? 2 : 1), 0);
+    acc[category] = max === 0 ? 0 : (total / max) * 100;
+    return acc;
+  }, {} as Record<QuestionCategory, number>);
+
+  const statements = getStatements();
+  const byId = new Map(statements.map((statement) => [statement.id, statement]));
+
+  const scored = responsePoints.map((point) => {
+    const statement = byId.get(point.questionId);
+    return {
+      id: point.questionId,
+      text: point.text.en,
+      value: point.numericValue,
+      col: statement?.col ?? 1,
+      row: statement?.row ?? 1,
+      x: statement?.x ?? 0,
+      y: statement?.y ?? 0,
+    };
+  });
+
+  const topAgreements = scored
+    .slice()
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 8)
+    .filter((item) => item.value > 0);
+  const topDisagreements = scored
+    .slice()
+    .sort((a, b) => a.value - b.value)
+    .slice(0, 8)
+    .filter((item) => item.value < 0);
 
   let authLeft = 0;
   let authRight = 0;
   let libLeft = 0;
   let libRight = 0;
-
-  for (const statement of statements) {
-    const value = answers[statement.id] ?? 0;
-    values.push(value);
-
-    rowBuckets[statement.row - 1].push(value);
-    colBuckets[statement.col - 1].push(value);
-
-    const cx = statement.x * value;
-    const cy = statement.y * value;
-
-    rawX += cx;
-    rawY += cy;
-    intensity += Math.abs(value);
-
-    directionalX += cx;
-    directionalY += cy;
-    directionalXAbs += Math.abs(cx);
-    directionalYAbs += Math.abs(cy);
-
-    if (statement.x < 0 && statement.y > 0) {
-      authLeft += value;
-    } else if (statement.x > 0 && statement.y > 0) {
-      authRight += value;
-    } else if (statement.x < 0 && statement.y < 0) {
-      libLeft += value;
-    } else if (statement.x > 0 && statement.y < 0) {
-      libRight += value;
+  for (const point of responsePoints) {
+    if (point.econContribution < 0 && point.socialContribution > 0) {
+      authLeft += point.emphasis;
+    } else if (point.econContribution > 0 && point.socialContribution > 0) {
+      authRight += point.emphasis;
+    } else if (point.econContribution < 0 && point.socialContribution < 0) {
+      libLeft += point.emphasis;
+    } else if (point.econContribution > 0 && point.socialContribution < 0) {
+      libRight += point.emphasis;
     }
   }
 
-  const econ = clamp((rawX / maxX) * 10, -10, 10);
-  const social = clamp((rawY / maxY) * 10, -10, 10);
-  const intensityPct = (intensity / (statements.length * 2)) * 100;
-  const distanceFromCenter = Math.sqrt(econ ** 2 + social ** 2);
-  const extremityPct = (distanceFromCenter / Math.sqrt(10 ** 2 + 10 ** 2)) * 100;
+  const rowAverages = [
+    mean(numericValues.slice(0, 10)),
+    mean(numericValues.slice(10, 20)),
+    mean(numericValues.slice(20, 30)),
+    mean(numericValues.slice(30, 40)),
+  ];
 
-  const avg = mean(values);
-  const variance = values.reduce((acc, value) => acc + (value - avg) ** 2, 0) / values.length;
-  const stdDeviation = Math.sqrt(variance);
-
-  const bucketMap = new Map<number, number>([
-    [-2, 0],
-    [-1, 0],
-    [0, 0],
-    [1, 0],
-    [2, 0],
-  ]);
-  for (const value of values) {
-    bucketMap.set(value, (bucketMap.get(value) ?? 0) + 1);
-  }
-  let entropy = 0;
-  for (const count of bucketMap.values()) {
-    if (count === 0) {
-      continue;
-    }
-    const p = count / values.length;
-    entropy -= p * Math.log2(p);
-  }
-  const entropyPct = (entropy / Math.log2(5)) * 100;
-
-  const coherenceX = directionalXAbs === 0 ? 0 : (Math.abs(directionalX) / directionalXAbs) * 100;
-  const coherenceY = directionalYAbs === 0 ? 0 : (Math.abs(directionalY) / directionalYAbs) * 100;
-  const coherenceOverall = (coherenceX + coherenceY) / 2;
-
-  const polarizationIndex = clamp(intensityPct * 0.6 + extremityPct * 0.4, 0, 100);
-
-  const withValue = statements.map((statement) => ({ ...statement, value: answers[statement.id] ?? 0 }));
-  const topAgreements = withValue
-    .slice()
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 8)
-    .filter((item) => item.value > 0);
-  const topDisagreements = withValue
-    .slice()
-    .sort((a, b) => a.value - b.value)
-    .slice(0, 8)
-    .filter((item) => item.value < 0);
+  const colAverages = Array.from({ length: 10 }, (_, index) =>
+    mean([numericValues[index], numericValues[index + 10], numericValues[index + 20], numericValues[index + 30]]),
+  );
 
   return {
     econ,
@@ -508,6 +1469,13 @@ export function computeAnalysis(answers: AnswerMap, mode: QuestionnaireMode = "a
     coherenceY,
     coherenceOverall,
     polarizationIndex,
+    responseSkew: moment.skew,
+    responseKurtosis: moment.kurtosis,
+    convictionIndex,
+    predictabilityIndex,
+    axisAlignment,
+    categoryScores,
+    categoryIntensities,
     topAgreements,
     topDisagreements,
     econLabel: axisDescriptor(econ, "left-leaning", "right-leaning"),
@@ -519,17 +1487,14 @@ export function computeAnalysis(answers: AnswerMap, mode: QuestionnaireMode = "a
       libLeft,
       libRight,
     },
-    rowAverages: rowBuckets.map((bucket) => mean(bucket)),
-    colAverages: colBuckets.map((bucket) => mean(bucket)),
+    rowAverages,
+    colAverages,
+    responsePoints,
   };
 }
 
-export function buildCohortSummary(
-  analyses: Analysis[],
-  answers: AnswerMap[],
-  mode?: QuestionnaireMode,
-): CohortSummary {
-  const statements = mode ? getStatements(mode) : [];
+export function buildCohortSummary(analyses: Analysis[], answers: AnswerMap[], mode?: QuestionnaireMode): CohortSummary {
+  const statements = getStatements(mode ?? "advanced");
   if (analyses.length === 0) {
     return {
       sampleSize: 0,
@@ -543,6 +1508,31 @@ export function buildCohortSummary(
       extremityStd: 0,
       entropyMean: 0,
       entropyStd: 0,
+      convictionMean: 0,
+      convictionStd: 0,
+      alignmentMean: 0,
+      alignmentStd: 0,
+      llmProfilesCount: 0,
+      llmCoveragePct: 0,
+      llmConfidenceCounts: {
+        low: 0,
+        medium: 0,
+        high: 0,
+      },
+      llmAxisDeltaMean: 0,
+      llmAxisDeltaStd: 0,
+      categoryMeans: {
+        general: 0,
+        single_priority: 0,
+        left_leaning: 0,
+        right_leaning: 0,
+      },
+      categoryStd: {
+        general: 0,
+        single_priority: 0,
+        left_leaning: 0,
+        right_leaning: 0,
+      },
       statementAverages: statements.map((statement) => ({ id: statement.id, text: statement.text, avg: 0 })),
       statementStdDev: statements.map((statement) => ({ id: statement.id, stdDev: 0 })),
       quadrantCounts: {
@@ -561,11 +1551,31 @@ export function buildCohortSummary(
   const intensityValues = analyses.map((analysis) => analysis.intensityPct);
   const extremityValues = analyses.map((analysis) => analysis.extremityPct);
   const entropyValues = analyses.map((analysis) => analysis.entropyPct);
+  const convictionValues = analyses.map((analysis) => analysis.convictionIndex);
+  const alignmentValues = analyses.map((analysis) => analysis.axisAlignment);
+  const llmAnalyses = analyses.filter((analysis) => analysis.llmProfile);
+  const llmAxisDeltas = llmAnalyses.map((analysis) => {
+    const llm = analysis.llmProfile;
+    if (!llm) {
+      return 0;
+    }
+    const dx = analysis.econ - llm.axis_scores.econ;
+    const dy = analysis.social - llm.axis_scores.social;
+    return Math.sqrt(dx ** 2 + dy ** 2);
+  });
+  const llmConfidenceCounts = llmAnalyses.reduce(
+    (acc, analysis) => {
+      const level = analysis.llmProfile?.respondent_summary.confidence_level;
+      if (level) {
+        acc[level] += 1;
+      }
+      return acc;
+    },
+    { low: 0, medium: 0, high: 0 } as Record<LLMConfidenceLevel, number>,
+  );
 
   const econAvg = mean(econValues);
   const socialAvg = mean(socialValues);
-  const econSigma = stdDev(econValues);
-  const socialSigma = stdDev(socialValues);
 
   let corrNumerator = 0;
   let econVar = 0;
@@ -600,35 +1610,70 @@ export function buildCohortSummary(
     }
   }
 
-  const statementAverages = statements.map((statement) => {
-    const values = answers.map((answerMap) => answerMap[statement.id] ?? 0);
+  const statementAverages = QUESTIONS.map((question) => {
+    const values = answers.map((answerMap) => {
+      const raw = answerMap[question.id];
+      if (question.kind === "likert") {
+        return typeof raw === "number" ? raw : 0;
+      }
+      return typeof raw === "string" ? optionNumericValue(question, raw) : 0;
+    });
     return {
-      id: statement.id,
-      text: statement.text,
+      id: question.id,
+      text: question.text.en,
       avg: mean(values),
     };
   });
 
-  const statementStdDev = statements.map((statement) => {
-    const values = answers.map((answerMap) => answerMap[statement.id] ?? 0);
+  const statementStdDev = QUESTIONS.map((question) => {
+    const values = answers.map((answerMap) => {
+      const raw = answerMap[question.id];
+      if (question.kind === "likert") {
+        return typeof raw === "number" ? raw : 0;
+      }
+      return typeof raw === "string" ? optionNumericValue(question, raw) : 0;
+    });
     return {
-      id: statement.id,
+      id: question.id,
       stdDev: stdDev(values),
     };
   });
 
+  const categoryMeans = CATEGORY_ORDER.reduce((acc, category) => {
+    const values = analyses.map((analysis) => analysis.categoryScores[category]);
+    acc[category] = mean(values);
+    return acc;
+  }, {} as Record<QuestionCategory, number>);
+
+  const categoryStd = CATEGORY_ORDER.reduce((acc, category) => {
+    const values = analyses.map((analysis) => analysis.categoryScores[category]);
+    acc[category] = stdDev(values);
+    return acc;
+  }, {} as Record<QuestionCategory, number>);
+
   return {
     sampleSize: analyses.length,
     econMean: econAvg,
-    econStd: econSigma,
+    econStd: stdDev(econValues),
     socialMean: socialAvg,
-    socialStd: socialSigma,
+    socialStd: stdDev(socialValues),
     intensityMean: mean(intensityValues),
     intensityStd: stdDev(intensityValues),
     extremityMean: mean(extremityValues),
     extremityStd: stdDev(extremityValues),
     entropyMean: mean(entropyValues),
     entropyStd: stdDev(entropyValues),
+    convictionMean: mean(convictionValues),
+    convictionStd: stdDev(convictionValues),
+    alignmentMean: mean(alignmentValues),
+    alignmentStd: stdDev(alignmentValues),
+    llmProfilesCount: llmAnalyses.length,
+    llmCoveragePct: analyses.length === 0 ? 0 : (llmAnalyses.length / analyses.length) * 100,
+    llmConfidenceCounts,
+    llmAxisDeltaMean: mean(llmAxisDeltas),
+    llmAxisDeltaStd: stdDev(llmAxisDeltas),
+    categoryMeans,
+    categoryStd,
     statementAverages,
     statementStdDev,
     quadrantCounts,
@@ -660,11 +1705,11 @@ export function buildNarrative(analysis: Analysis, comparative?: ComparativeMetr
   const lines: string[] = [];
 
   lines.push(
-    `You place ${analysis.econLabel} on economics (${analysis.econ.toFixed(2)}) and ${analysis.socialLabel} on social authority (${analysis.social.toFixed(2)}).`
+    `You place ${analysis.econLabel} on economics (${analysis.econ.toFixed(2)}) and ${analysis.socialLabel} on social authority (${analysis.social.toFixed(2)}).`,
   );
 
   lines.push(
-    `Your nearest archetype is ${analysis.nearestArchetype.name} with ${analysis.nearestArchetype.similarityPct.toFixed(1)}% geometric similarity.`
+    `Your nearest archetype is ${analysis.nearestArchetype.name} with ${analysis.nearestArchetype.similarityPct.toFixed(1)}% geometric similarity.`,
   );
 
   if (analysis.extremityPct >= 70) {
@@ -675,21 +1720,17 @@ export function buildNarrative(analysis: Analysis, comparative?: ComparativeMetr
     lines.push("Your ideological distance from center is moderate, suggesting selective intensity.");
   }
 
-  if (analysis.entropyPct >= 75) {
-    lines.push("Your answer distribution spans the full response scale, indicating nuanced gradation rather than binary alignment.");
-  } else if (analysis.entropyPct <= 40) {
-    lines.push("Your answer distribution is concentrated in fewer categories, indicating more rigid response style.");
-  }
-
   if (analysis.coherenceOverall >= 65) {
     lines.push("Cross-item directional coherence is high, suggesting internally consistent ideological structure.");
   } else {
     lines.push("Cross-item directional coherence is mixed, suggesting cross-pressured beliefs across issues.");
   }
 
+  lines.push(`Conviction index: ${analysis.convictionIndex.toFixed(1)}%. Predictability index: ${analysis.predictabilityIndex.toFixed(1)}%.`);
+
   if (comparative) {
     lines.push(
-      `Relative to the cohort, your intensity is at the ${comparative.intensityPercentile.toFixed(1)}th percentile and extremity at the ${comparative.extremityPercentile.toFixed(1)}th percentile.`
+      `Relative to the cohort, your intensity is at the ${comparative.intensityPercentile.toFixed(1)}th percentile and extremity at the ${comparative.extremityPercentile.toFixed(1)}th percentile.`,
     );
   }
 
